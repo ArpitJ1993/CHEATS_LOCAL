@@ -17,6 +17,7 @@ export const MeetingsSummary: React.FC<MeetingsSummaryProps> = ({ enabled, reset
   const [isStreaming, setIsStreaming] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const inFlightAbortRef = useRef<() => void>();
+  const inFlightRequestRef = useRef<Promise<void> | null>(null); // Track in-flight requests
   const vendorKey = settings.vendorKeys?.[settings.vendor] || '';
   const provider = useMemo(() => createVendorProvider(settings.vendor, vendorKey), [settings.vendor, vendorKey]);
 
@@ -60,17 +61,24 @@ export const MeetingsSummary: React.FC<MeetingsSummaryProps> = ({ enabled, reset
       onChunk: (chunk: string) => {
         if (cancelled) return;
         buffer += chunk;
-        // Remove duplicate words/phrases from summary
-        const deduplicated = removeDuplicateWords(buffer);
-        setSummary(deduplicated);
+        // Don't update summary while streaming - keep showing old summary
+        // We'll update it only when complete in onComplete
       },
       onComplete: () => {
         if (cancelled) return;
+        // Only update summary if we have new content
+        if (buffer.trim()) {
+          const deduplicated = removeDuplicateWords(buffer);
+          setSummary(deduplicated);
+        }
         setIsStreaming(false);
+        inFlightRequestRef.current = null;
       },
       onError: () => {
         if (cancelled) return;
+        // On error, keep the existing summary visible
         setIsStreaming(false);
+        inFlightRequestRef.current = null;
       }
     };
 
@@ -89,11 +97,15 @@ export const MeetingsSummary: React.FC<MeetingsSummaryProps> = ({ enabled, reset
       ? provider.streamAudioSummary({ transcript, callbacks })
       : provider.streamText(summaryMessages, callbacks);
 
-    summaryPromise.catch(() => {
+    // Track the in-flight request
+    inFlightRequestRef.current = summaryPromise.then(() => {
+      inFlightRequestRef.current = null;
+    }).catch(() => {
       if (cancelled) return;
       setIsStreaming(false);
+      inFlightRequestRef.current = null;
     });
-  }, [provider, removeDuplicateWords]);
+  }, [provider, removeDuplicateWords, summary]);
 
   // Reset handler: clear transcript when resetCounter changes
   useEffect(() => {
@@ -108,10 +120,13 @@ export const MeetingsSummary: React.FC<MeetingsSummaryProps> = ({ enabled, reset
   // Call summary every 5 seconds when enabled
   useEffect(() => {
     if (!enabled) {
+      // When disabled, stop scheduling new requests but don't clear the summary
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
+      // Don't abort in-flight request - let it complete and show the result
+      // The summary will remain visible even when disabled
       return;
     }
 
@@ -128,34 +143,40 @@ export const MeetingsSummary: React.FC<MeetingsSummaryProps> = ({ enabled, reset
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
-      if (inFlightAbortRef.current) {
+      // Only abort if we're still enabled (component unmounting)
+      // If disabled, we want to let the request complete
+      if (enabled && inFlightAbortRef.current) {
         inFlightAbortRef.current();
       }
     };
   }, [enabled, runSummary]);
 
   return (
-    <Paper elevation={2} sx={{ p: 2, height: 'calc(100vh - 160px)', overflow: 'auto', background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
-      <Typography variant="h6" gutterBottom sx={{ color: 'var(--color-text)', fontWeight: 600 }}>
-        Summary
-      </Typography>
-      <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
-        <button 
-          type="button"
-          onClick={() => setSummary('')}
-          style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid var(--color-border)', cursor: 'default', background: 'transparent', color: 'var(--color-text)' }}
-        >
-          Clear Summary
-        </button>
-      </Box>
-      {isStreaming ? (
-        <LoadingIndicator loading message="Summarizing…" size="small" />
-      ) : (
+    <>
+      {isStreaming && (
+        <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1, color: 'var(--color-text-secondary)', fontSize: '0.875rem', fontStyle: 'italic' }}>
+          <LoadingIndicator loading message="" size="small" />
+          <span>Fetching the latest summary...</span>
+        </Box>
+      )}
+      <Paper elevation={2} sx={{ p: 2, height: 'calc(100vh - 160px)', overflow: 'auto', background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+        <Typography variant="h6" gutterBottom sx={{ color: 'var(--color-text)', fontWeight: 600 }}>
+          Summary
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+          <button 
+            type="button"
+            onClick={() => setSummary('')}
+            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid var(--color-border)', cursor: 'default', background: 'transparent', color: 'var(--color-text)' }}
+          >
+            Clear Summary
+          </button>
+        </Box>
         <Box component="div" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }} data-summary-text>
           {summary}
         </Box>
-      )}
-    </Paper>
+      </Paper>
+    </>
   );
 };
 

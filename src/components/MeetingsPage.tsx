@@ -127,7 +127,7 @@ export const MeetingsPage: React.FC = () => {
 
   const [questionsEnabled, setQuestionsEnabled] = React.useState(false);
   const [summaryEnabled, setSummaryEnabled] = React.useState(false);
-  const [transcriptionEnabled, setTranscriptionEnabled] = React.useState(true);
+  // Note: Transcription capture is always active in background (not shown in UI) for summary and questions
   const [resetCounter, setResetCounter] = React.useState(0);
   const [inputText, setInputText] = React.useState('');
   const [resultText, setResultText] = React.useState('');
@@ -350,11 +350,11 @@ export const MeetingsPage: React.FC = () => {
               <Button variant="outlined" onClick={() => dispatch(setCurrentView('main'))}>⬅ Back</Button>
             </MeetingsHeaderControls>
             <MeetingsHeaderControls>
-              <Box display="flex" gap={1} alignItems="center">
-                <FormControlLabel control={<Switch checked={transcriptionEnabled} onChange={(e) => setTranscriptionEnabled(e.target.checked)} />} label="Transcription" />
-                <FormControlLabel control={<Switch checked={summaryEnabled} onChange={(e) => setSummaryEnabled(e.target.checked)} />} label="Summary" />
-                <FormControlLabel control={<Switch checked={questionsEnabled} onChange={(e) => setQuestionsEnabled(e.target.checked)} />} label="Questions" />
-              </Box>
+            <Box display="flex" gap={1} alignItems="center">
+              {/* Transcription switch removed - transcription always active in background for summary/questions */}
+              <FormControlLabel control={<Switch checked={summaryEnabled} onChange={(e) => setSummaryEnabled(e.target.checked)} />} label="Summary" />
+              <FormControlLabel control={<Switch checked={questionsEnabled} onChange={(e) => setQuestionsEnabled(e.target.checked)} />} label="Questions" />
+            </Box>
             </MeetingsHeaderControls>
           </Box>
         </MeetingsHeader>
@@ -469,9 +469,8 @@ export const MeetingsPage: React.FC = () => {
             <Results id="speakerResults">Waiting for system audio...</Results>
           </Grid>
 
-          <Grid item xs={12}>
-            <MeetingsTranscription enabled={transcriptionEnabled} />
-          </Grid>
+          {/* Transcription UI hidden - but capture logic still active in background for summary and questions */}
+          {/* <MeetingsTranscription enabled={true} /> */}
 
           <Grid item xs={12} md={6}>
             <MeetingsSummary enabled={summaryEnabled} />
