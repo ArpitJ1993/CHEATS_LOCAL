@@ -122,7 +122,9 @@ const ActionButtons = styled.div`
 
 export const MainInterface: React.FC = () => {
   const dispatch = useDispatch();
-  const [query, setQuery] = useState('');
+  const DEFAULT_QUERY =
+    'You are in a interview (coding). You must implement the solution in javascript. Explain in brief the approach';
+  const [query, setQuery] = useState(DEFAULT_QUERY);
   const [isSubmitting, setIsSubmitting] = useState(false);
   
   const { items: screenshots } = useSelector((state: RootState) => state.screenshots);
@@ -244,7 +246,7 @@ export const MainInterface: React.FC = () => {
         onComplete: () => {
           dispatch(completeResponse());
           setIsSubmitting(false);
-          setQuery('');
+          setQuery(DEFAULT_QUERY);
           if (screenshots.length > 0) {
             dispatch(clearScreenshots());
           }
@@ -262,11 +264,14 @@ export const MainInterface: React.FC = () => {
 
       if (screenshots.length > 0) {
          const screenshotsData = screenshots.map((s) => s.data);
+         const promptText = currentQuery.trim()
+           ? `${currentQuery.trim()}\n\n(See attached screenshot(s).)`
+           : 'Please analyze these screenshots and provide detailed insights.';
          const imageMessages = [
            baseMessages[0],
            {
              role: 'user' as const,
-             content: query.trim() || 'Please analyze these screenshots and provide detailed insights.'
+             content: promptText
            }
          ];
         if (!provider.streamMultimodal) {
@@ -292,7 +297,7 @@ export const MainInterface: React.FC = () => {
   }, [query, screenshots, dispatch, provider, vendorMetadata.label, vendorKey]);
 
   const handleReset = useCallback(() => {
-    setQuery('');
+    setQuery(DEFAULT_QUERY);
     dispatch(clearScreenshots());
     dispatch(clearCurrentConversation());
   }, [dispatch]);

@@ -17,8 +17,34 @@ function getRuntimeApiKey(): string {
 const OPENAI_API_KEY = process.env.REACT_APP_OPENAI_API_KEY || process.env.OPENAI_API_KEY || getRuntimeApiKey();
 const OPENAI_API_BASE_URL = process.env.REACT_APP_OPENAI_API_BASE_URL || process.env.OPENAI_API_BASE_URL || 'https://api.openai.com/v1';
 const OPENAI_MODEL = process.env.REACT_APP_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4-turbo';
+// Model to use for multimodal (screenshots / image_url). Defaults to an image-capable model.
+const OPENAI_VISION_MODEL =
+  process.env.REACT_APP_OPENAI_VISION_MODEL ||
+  process.env.OPENAI_VISION_MODEL ||
+  'gpt-4o-mini';
 const OPENAI_MAX_TOKENS = parseInt(process.env.REACT_APP_OPENAI_MAX_TOKENS || process.env.OPENAI_MAX_TOKENS || '1000');
 const OPENAI_TEMPERATURE = parseFloat(process.env.REACT_APP_OPENAI_TEMPERATURE || process.env.OPENAI_TEMPERATURE || '0.7');
+
+function isOpenAIImageCapableModel(model: string): boolean {
+  // Keep this intentionally simple and conservative.
+  // We default to gpt-4o-mini for images when unsure.
+  const m = (model || '').toLowerCase();
+  return m.startsWith('gpt-4o') || m.startsWith('gpt-4.1');
+}
+
+function getOpenAIVisionModel(): string {
+  // If OPENAI_MODEL is already image-capable, reuse it; otherwise use dedicated vision model.
+  return isOpenAIImageCapableModel(OPENAI_MODEL) ? OPENAI_MODEL : OPENAI_VISION_MODEL;
+}
+
+function isImageModelMismatchError(message?: string): boolean {
+  const m = (message || '').toLowerCase();
+  return (
+    m.includes('image_url is only supported') ||
+    m.includes('invalid content type') ||
+    m.includes('messages') && m.includes('image_url')
+  );
+}
 
 class OpenAIService {
   private apiKey: string;
@@ -154,12 +180,16 @@ class OpenAIService {
       // Create multimodal messages with images
       const multimodalMessages = messages.map(message => {
         if (message.role === 'user' && images.length > 0) {
+          const userText = (message.content || '').trim();
+          const textForModel =
+            userText ||
+            'Please analyze the attached screenshot(s) and provide detailed insights.';
           return {
             role: message.role,
             content: [
               {
                 type: 'text' as const,
-                text: message.content,
+                text: textForModel,
               },
               ...imageMessages,
             ],
@@ -168,74 +198,98 @@ class OpenAIService {
         return message;
       });
 
-      // Use GPT-4 Turbo for image analysis
-      const request = {
-        model: OPENAI_MODEL,
-        messages: multimodalMessages,
-        stream: true,
-        max_tokens: OPENAI_MAX_TOKENS,
-        temperature: OPENAI_TEMPERATURE,
-      };
+      // Some OpenAI models don't support image_url. Prefer an image-capable model and retry once if needed.
+      const candidateModels = Array.from(
+        new Set<string>([
+          getOpenAIVisionModel(),
+          'gpt-4o-mini',
+          'gpt-4o',
+        ].filter(Boolean))
+      );
 
+      let lastErrorData: any = null;
 
-      const response = await fetch(`${this.baseURL}/chat/completions`, {
-        method: 'POST',
-        headers: this.createHeaders(),
-        body: JSON.stringify(request),
-      });
+      for (let i = 0; i < candidateModels.length; i++) {
+        const model = candidateModels[i];
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new APIError(
-          'API_ERROR',
-          errorData.error?.message || 'API request failed',
-          errorData
-        );
-      }
+        const request = {
+          model,
+          messages: multimodalMessages,
+          stream: true,
+          max_tokens: OPENAI_MAX_TOKENS,
+          temperature: OPENAI_TEMPERATURE,
+        };
 
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new APIError('API_ERROR', 'Failed to get response reader');
-      }
+        const response = await fetch(`${this.baseURL}/chat/completions`, {
+          method: 'POST',
+          headers: this.createHeaders(),
+          body: JSON.stringify(request),
+        });
 
-      let fullResponse = '';
-      const decoder = new TextDecoder();
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          lastErrorData = errorData;
+          const msg = errorData?.error?.message || 'API request failed';
 
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+          // If the error indicates the chosen model doesn't support image_url, try next candidate.
+          if (i < candidateModels.length - 1 && isImageModelMismatchError(msg)) {
+            continue;
+          }
 
-          const chunk = decoder.decode(value);
-          const lines = chunk.split('\n');
+          throw new APIError('API_ERROR', msg, errorData);
+        }
 
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6);
-              if (data === '[DONE]') {
-                onComplete?.();
-                return fullResponse;
-              }
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new APIError('API_ERROR', 'Failed to get response reader');
+        }
 
-              try {
-                const parsed = JSON.parse(data);
-                const content = parsed.choices?.[0]?.delta?.content;
-                if (content) {
-                  fullResponse += content;
-                  onChunk?.(content);
+        let fullResponse = '';
+        const decoder = new TextDecoder();
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value);
+            const lines = chunk.split('\n');
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const data = line.slice(6);
+                if (data === '[DONE]') {
+                  onComplete?.();
+                  return fullResponse;
                 }
-              } catch (e) {
-                // Ignore parsing errors for incomplete chunks
+
+                try {
+                  const parsed = JSON.parse(data);
+                  const content = parsed.choices?.[0]?.delta?.content;
+                  if (content) {
+                    fullResponse += content;
+                    onChunk?.(content);
+                  }
+                } catch (e) {
+                  // Ignore parsing errors for incomplete chunks
+                }
               }
             }
           }
+        } finally {
+          reader.releaseLock();
         }
-      } finally {
-        reader.releaseLock();
+
+        onComplete?.();
+        return fullResponse;
       }
 
-      onComplete?.();
-      return fullResponse;
+      // Should never reach here, but just in case.
+      throw new APIError(
+        'API_ERROR',
+        lastErrorData?.error?.message || 'API request failed',
+        lastErrorData
+      );
     } catch (error) {
       const apiError = this.handleError(error);
       onError?.(apiError);
