@@ -447,8 +447,6 @@ function createWindow() {
   const windowOptions = {
     width: Math.min(1200, width * 0.8),
     height: Math.min(800, height * 0.8),
-    minWidth: 800,
-    minHeight: 600,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -461,7 +459,9 @@ function createWindow() {
     skipTaskbar: false,
     alwaysOnTop: false,
     transparent: false,
-    frame: true,
+    // Use frameless window so CSS `-webkit-app-region: drag` works.
+    // (This enables dragging via our React headers.)
+    frame: false,
     resizable: true,
     movable: true, // Enable window dragging with mouse/touchpad
     minimizable: true,
@@ -980,6 +980,35 @@ app.whenReady().then(() => {
   globalShortcut.register('CmdOrCtrl+Down', () => moveWindow(0, moveBy));
   globalShortcut.register('CmdOrCtrl+Left', () => moveWindow(-moveBy, 0));
   globalShortcut.register('CmdOrCtrl+Right', () => moveWindow(moveBy, 0));
+
+  // Resize window shortcuts (keep center anchored).
+  // Use an extra modifier to avoid clashing with common text-selection shortcuts.
+  const resizeBy = 50;
+  const MIN_WINDOW_WIDTH = 200;
+  const MIN_WINDOW_HEIGHT = 120;
+  const resizeWindow = (dWidth, dHeight) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      const bounds = mainWindow.getBounds();
+      const nextWidth = Math.max(MIN_WINDOW_WIDTH, bounds.width + dWidth);
+      const nextHeight = Math.max(MIN_WINDOW_HEIGHT, bounds.height + dHeight);
+      const nextX = Math.round(bounds.x - (nextWidth - bounds.width) / 2);
+      const nextY = Math.round(bounds.y - (nextHeight - bounds.height) / 2);
+
+      mainWindow.setBounds({ x: nextX, y: nextY, width: nextWidth, height: nextHeight }, false);
+      try {
+        if (overlayWindow && !overlayWindow.isDestroyed()) {
+          overlayWindow.setBounds(mainWindow.getBounds());
+        }
+      } catch {}
+    } catch {}
+  };
+
+  // CmdOrCtrl+Shift+W/A/S/D: resize (W taller, S shorter, D wider, A narrower)
+  globalShortcut.register('CmdOrCtrl+Shift+D', () => resizeWindow(resizeBy, 0)); // wider
+  globalShortcut.register('CmdOrCtrl+Shift+A', () => resizeWindow(-resizeBy, 0)); // narrower
+  globalShortcut.register('CmdOrCtrl+Shift+W', () => resizeWindow(0, resizeBy)); // taller
+  globalShortcut.register('CmdOrCtrl+Shift+S', () => resizeWindow(0, -resizeBy)); // shorter
 
   const applyOpacity = (value) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
